@@ -1,5 +1,9 @@
 # Separate Perlmutter CPU installation — Chuyang Liu
 
+For the newer user-requested login-node compilation procedure, see
+[NERSC_LOGIN_INSTALL.md](NERSC_LOGIN_INSTALL.md). It preserves the interrupted
+build and includes explicit oversubscribe removal and a bounded login test.
+
 This recipe creates a new experimental installation. It does not modify
 `/global/homes/c/cliu6/Software/petsc`,
 `/global/homes/c/cliu6/Software/pflotran`, the older Open-MPI build, shell
