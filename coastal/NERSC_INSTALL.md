@@ -1,0 +1,209 @@
+# Separate Perlmutter CPU installation — Chuyang Liu
+
+This recipe creates a new experimental installation. It does not modify
+`~/Software/petsc`, `~/Software/pflotran`, the older Open-MPI build, shell
+startup files, production job scripts, or existing results.
+
+CPE 26.03 is listed in NERSC's August 2026 environment update. Use its Cray
+compiler wrappers and Cray MPICH, not a mixture with Open MPI. CMake is a
+build tool; loading it does not select an MPI library. PFLOTRAN itself uses
+make; PETSc downloads/builds its needed libraries.
+
+## 1. Start a fresh NERSC login shell and inspect modules
+
+```bash
+module reset
+module load cpe/26.03
+module load PrgEnv-gnu
+module load cpu
+module load cmake
+module list
+command -v cc CC ftn cmake python3
+cc --version
+ftn --version
+srun --mpi=list
+```
+
+Confirm `cray-mpich` is loaded, Open MPI is absent, and `cray_shasta` is
+available. If `module reset` reports that a previous CPE needs its restore
+script, follow the exact restore path printed by Lmod, then start this step
+again. Do not copy the old 24.07 restore path blindly. If a requested module
+is unavailable, stop and record `module spider cpe/26.03`; do not silently
+substitute a different compiler stack.
+
+## 2. Create an isolated scratch directory and clone pinned sources
+
+```bash
+export BUILD_ROOT=/pscratch/sd/c/cliu6/NERSC_notebooks/Norfolk/software/pflotran-v5.0-auxrefresh1-cpe2603
+if test -e "$BUILD_ROOT"; then
+  echo 'Directory already exists: choose a new BUILD_ROOT; do not overwrite it.'
+else
+  mkdir -p "$BUILD_ROOT/src"
+fi
+```
+
+Proceed only with a newly created directory:
+
+```bash
+git clone --branch coastal-v5.0-auxrefresh-diag1 --single-branch \
+  https://github.com/lcy91/pflotran-coastal.git "$BUILD_ROOT/src/pflotran"
+git clone --branch v3.21.5 --depth 1 \
+  https://gitlab.com/petsc/petsc.git "$BUILD_ROOT/src/petsc"
+git -C "$BUILD_ROOT/src/pflotran" rev-parse HEAD
+git -C "$BUILD_ROOT/src/petsc" rev-parse HEAD
+```
+
+The PETSc commit must be `9cffe78795669c5fbaf7ca6d864d230635faa5ef`.
+Record the PFLOTRAN release-tag commit. A tag identifies the source; the build
+also records exact compiler/module versions and executable checksum. Keep
+these records because CPE module dependencies can change over time.
+
+Scratch avoids the nearly full home inode quota, but is not permanent
+software storage. Retain the source tag and audit externally. After validation,
+a project software location can be considered if available and authorized;
+relocating shared libraries may require rebuilding because of embedded paths.
+
+## 3. Submit the isolated build and basic tests
+
+```bash
+cd "$BUILD_ROOT/src/pflotran"
+sbatch --export=ALL,BUILD_ROOT="$BUILD_ROOT" coastal/build-cpe2603.slurm
+```
+
+The supplied job uses one CPU node, regular QOS, eight build workers and a
+2-hour cap. Builds run on the allocated node rather than consuming login-node
+CPU. It configures PETSc with:
+
+```bash
+export PETSC_DIR="$BUILD_ROOT/src/petsc"
+export PETSC_ARCH=arch-cpe2603-gnu-cpu-opt
+# Executed inside the supplied batch job:
+python3 ./configure PETSC_ARCH="$PETSC_ARCH" \
+  --with-cc=cc --with-cxx=CC --with-fc=ftn \
+  '--with-mpiexec=srun --mpi=cray_shasta --cpu-bind=cores' \
+  --with-batch=0 --with-debugging=0 --with-make-np=8 \
+  --COPTFLAGS=-O3 --CXXOPTFLAGS=-O3 --FOPTFLAGS=-O3 \
+  --download-hdf5=yes --download-hdf5-fortran-bindings=yes \
+  --download-fblaslapack=yes --download-metis=yes --download-parmetis=yes \
+  --download-hypre=yes
+```
+
+Configuration requires outbound dependency downloads from the allocated
+node; a download failure is not a solver failure. Preserve logs and resolve
+that failure before retrying in a fresh build root. `--with-batch=0` is used
+because this configure runs inside an allocation with a working `srun`; do
+not copy it into a login-node MPI configuration run.
+
+There is no `--download-openmpi` or `--download-mpich`. HDF5 and dependencies
+are rebuilt against the new stack. No old PETSc libraries are reused.
+No `--download-cmake` is requested because the module supplies CMake.
+No manual removal of `--oversubscribe` is needed: the launcher is selected
+at configuration time. Do not edit generated `petscvariables`.
+
+The job runs PETSc `make check` and the PFLOTRAN check configuration via the
+Python regression runner, with separate serial and MPI launch wrappers.
+The original PFLOTRAN makefile prefixes regression commands with `-`, which
+can mask a nonzero test status; the recipe calls the runner directly instead.
+These are basic installation checks, not the complete regression suite.
+
+## 4. Read build results before running models
+
+```bash
+squeue -u cliu6
+# Replace JOBID with the actual build job ID:
+sacct -j JOBID --format=JobID,State,Elapsed,ExitCode
+```
+
+Inspect `build_JOBID.out`, `build_JOBID.err`, and
+`$BUILD_ROOT/audit/build_JOBID/`. The latter includes full build log, module
+versions, compiler versions, source commits, PETSc configuration and
+`ldd.txt`. Confirm there are no missing libraries or Open-MPI dependencies.
+Do not interpret a successful compilation as a coastal runtime pass.
+
+New executable:
+
+```bash
+export PFLOTRAN_EXE_NEW="$BUILD_ROOT/bin/pflotran-coastal-diag1"
+sha256sum "$PFLOTRAN_EXE_NEW"
+```
+
+No global PATH change is needed. Your old executable stays at its old path.
+After a failed build, preserve its directory/logs and choose a new suffix;
+the script deliberately refuses to overwrite a configured architecture.
+
+## 5. Run the two separate coastal smoke cases
+
+Upload the separately provided `pflotran_coastal_diag1_smoke_cases.tar.gz`
+and `.sha256` file to the Norfolk scratch directory. This bundle is not in
+GitHub: it contains small model inputs and checkpoint copies, not source.
+It is a diagnostic bundle, not accepted scientific histories.
+
+```bash
+cd /pscratch/sd/c/cliu6/NERSC_notebooks/Norfolk
+sha256sum -c pflotran_coastal_diag1_smoke_cases.tar.gz.sha256
+# Extract once into a new directory; stop if it already exists.
+test ! -e pflotran_coastal_diag1_smoke_cases && \
+  tar -xzf pflotran_coastal_diag1_smoke_cases.tar.gz
+export CASE_DIR="$PWD/pflotran_coastal_diag1_smoke_cases/historical_35047"
+cd "$BUILD_ROOT/src/pflotran"
+sbatch --export=ALL,BUILD_ROOT="$BUILD_ROOT",CASE_DIR="$CASE_DIR" coastal/smoke-cpe2603.slurm
+```
+
+After reviewing the historical result, submit the distinct future test:
+
+```bash
+export CASE_DIR=/pscratch/sd/c/cliu6/NERSC_notebooks/Norfolk/pflotran_coastal_diag1_smoke_cases/future_S15_35047
+cd "$BUILD_ROOT/src/pflotran"
+sbatch --export=ALL,BUILD_ROOT="$BUILD_ROOT",CASE_DIR="$CASE_DIR" coastal/smoke-cpe2603.slurm
+```
+
+Each requests one debug node for at most 30 minutes, runs one 24-hour
+simulation, and verifies the ledger endpoint. They are bounded diagnostics,
+not production or chained debug allocations. The launcher is:
+
+```bash
+srun --mpi=cray_shasta -n 1 -c 2 --cpu-bind=cores \
+  "$PFLOTRAN_EXE_NEW" -input_prefix pflotran -swi_restart_refresh_passes 8
+```
+
+Run from the selected case directory. The option is essential: default zero
+leaves the experimental refresh disabled. Keep the PMI/Slurm environment
+provided by `srun`; do not reuse the old Open-MPI singleton variable-unsetting
+logic. Do not reuse old `HWLOC_COMPONENTS=-x86` settings without independent
+evidence that this different MPI stack needs them.
+
+## 6. Gates before production
+
+Review stdout/stderr, `sacct` and `seff`; verify both diagnostic endpoints,
+hourly ledgers, restart continuity and numerical results. Then validate
+representative repeated histories and full uninterrupted 50-year branches.
+Finally validate a distinct 128-physical-core ensemble launcher for this MPI
+stack. The current GNU Parallel/direct-singleton Open-MPI controller is not
+certified for Cray MPICH and must not simply receive this executable path.
+
+The hydrostatic guard override suppresses a v5.0 restriction, and the refresh
+is a diagnostic repeated-initialization prototype. Neither is claimed to be
+upstream-approved or generally safe for all PFLOTRAN modes. Preserve default
+zero and explicitly select the diagnostic option in tests. Do not overwrite
+the old release or its result trees.
+
+## Version control
+
+New work is committed as Chuyang Liu. Upstream authors and LICENSE/COPYRIGHT
+remain intact. This is a GitHub-hosted downstream of Bitbucket PFLOTRAN,
+not a native GitHub fork relationship. Use separate descriptive branches and
+new tags for changes; do not rewrite released tags. Never commit executable
+build outputs, PETSc downloads, credentials, or model result trees.
+
+## Official references
+
+- [NERSC environment timeline](https://docs.nersc.gov/systems/perlmutter/timeline/)
+- [NERSC compiler wrappers](https://docs.nersc.gov/development/build-tools/autoconf-make/)
+- [NERSC CMake](https://docs.nersc.gov/development/build-tools/cmake/)
+- [NERSC Slurm jobs](https://docs.nersc.gov/jobs/)
+- [NERSC Cray MPI launcher selection](https://docs.nersc.gov/development/programming-models/mpi/nvshmem/)
+- [PETSc configure guidance](https://petsc.org/release/install/install/)
+- [PFLOTRAN PETSc version history](https://www.pflotran.org/documentation/user_guide/how_to/installation/previous_petsc_releases.html)
+
+NERSC execution of this recipe is still to be performed. Local script syntax
+and source equivalence were checked; no claim of a completed NERSC build.
