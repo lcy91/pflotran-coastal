@@ -77,12 +77,23 @@ This home-software/scratch-model-data split follows NERSC's filesystem guidance.
 
 ```bash
 cd "$BUILD_ROOT/src/pflotran"
-sbatch --export=ALL,BUILD_ROOT="$BUILD_ROOT" coastal/build-cpe2603.slurm
+sbatch --qos=debug --time=00:30:00 \
+  --export=ALL,BUILD_ROOT="$BUILD_ROOT" coastal/build-cpe2603.slurm
 ```
 
-The supplied job uses one CPU node, regular QOS, eight build workers and a
-2-hour cap. Builds run on the allocated node rather than consuming login-node
-CPU. It configures PETSc with:
+The command-line overrides above select debug QOS and a 30-minute cap,
+replacing the script's regular/2-hour defaults without editing the pinned tag.
+It uses one CPU node and eight build workers. This is a complete PETSc,
+dependency and PFLOTRAN build plus installation checks, not just a one-core
+model smoke test; completion within 30 minutes has not been measured.
+Do not chain debug jobs. If the build times out, retain the build logs and
+inspect the failed stage before deciding how to continue.
+
+NERSC permits limited-thread compilation on login nodes (for example,
+`make -j 8`). However, this particular all-in-one script requires an allocation:
+PETSc configuration probes and regression checks use `srun`, and it reads
+`SLURM_JOB_ID`. Do not run it directly with `bash` on a login node.
+It configures PETSc with:
 
 ```bash
 export PETSC_DIR="$BUILD_ROOT/src/petsc"
@@ -214,6 +225,28 @@ source "$BUILD_ROOT/src/pflotran/coastal/nersc-env.sh"
 Use the executable explicitly from a scratch case directory. No shell startup
 file or existing executable symlink needs changing.
 
+## Confirm the local edits and MPI launcher
+
+The source includes the three commented hydrostatic SALINITY error lines in
+`src/pflotran/pm_auxiliary.F90` and the opt-in restart-refresh edit in
+`src/pflotran/simulation_subsurface.F90`. Inspect with:
+
+```bash
+sed -n '303,311p' "$BUILD_ROOT/src/pflotran/src/pflotran/pm_auxiliary.F90"
+grep -n swi_restart_refresh_passes "$BUILD_ROOT/src/pflotran/src/pflotran/simulation_subsurface.F90"
+```
+
+The new PETSc configure explicitly selects `srun`; it does not patch or reuse
+old `petscvariables`. After configuration, verify the generated launcher:
+
+```bash
+grep -nE '^(MPIEXEC|MPIEXEC_FLAGS)[[:space:]]*=' \
+  "$BUILD_ROOT/src/petsc/arch-cpe2603-gnu-cpu-opt/lib/petsc/conf/petscvariables"
+```
+
+No `--oversubscribe` is supplied by this recipe. Inspect the actual generated
+file after building; do not claim its contents have been verified before that.
+
 ## Version control
 
 Installation revision: `coastal-v5.0-auxrefresh-diag1-home1`. This changes
@@ -227,6 +260,8 @@ new tags for changes; do not rewrite released tags. Never commit executable
 build outputs, PETSc downloads, credentials, or model result trees.
 
 ## Official references
+
+- [NERSC login-node and debug usage policy](https://docs.nersc.gov/policies/resource-usage/)
 
 - [NERSC filesystem guidance](https://docs.nersc.gov/filesystems/)
 
