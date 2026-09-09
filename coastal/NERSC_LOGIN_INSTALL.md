@@ -1,3 +1,5 @@
+> Superseded by the user-requested [Open MPI installation guide](NERSC_OPENMPI_INSTALL.md). Do not follow this Cray-MPICH recipe for the replacement.
+
 # PFLOTRAN coastal: home installation, login-node compilation and quick test
 
 Maintainer: Chuyang Liu.
