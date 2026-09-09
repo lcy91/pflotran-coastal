@@ -180,7 +180,8 @@ subroutine SimSubsurfInitializeRun(this)
   PetscViewer :: viewer
   PetscBool :: flag
   PetscErrorCode :: ierr
-  PetscInt :: swi_refresh_passes, swi_pass
+  PetscInt :: swi_refresh_passes, swi_pass, swi_applied_passes
+  character(len=256) :: swi_audit_message
 
 #ifdef DEBUG
   call PrintMsg(this%option,'SimSubsurfInitializeRun()')
@@ -249,12 +250,22 @@ subroutine SimSubsurfInitializeRun(this)
   call PetscOptionsGetInt(PETSC_NULL_OPTIONS,PETSC_NULL_CHARACTER, &
     '-swi_restart_refresh_passes',swi_refresh_passes,flag,ierr)
   CHKERRQ(ierr)
+  swi_applied_passes = 0
+  write(swi_audit_message,'(a,i0,a,l1,a,l1,a,l1)') &
+    'SWI_REFRESH_AUDIT requested=',swi_refresh_passes, &
+    ' supplied=',flag,' restart=',this%option%restart_flag, &
+    ' salinity_density=',this%option%flow%density_depends_on_salinity
+  call PrintMsg(this%option,trim(swi_audit_message))
   if (this%option%restart_flag .and. &
       this%option%flow%density_depends_on_salinity) then
     do swi_pass = 1, swi_refresh_passes
       call this%process_model_coupler_list%InitializeRun()
+      swi_applied_passes = swi_applied_passes + 1
     enddo
   endif
+  write(swi_audit_message,'(a,i0)') &
+    'SWI_REFRESH_AUDIT applied=',swi_applied_passes
+  call PrintMsg(this%option,trim(swi_audit_message))
   call this%JumpStart()
 
   call SimulationBaseInputRecordPrint(this,this%option)
