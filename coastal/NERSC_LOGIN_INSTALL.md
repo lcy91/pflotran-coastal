@@ -113,54 +113,66 @@ These three error lines are already commented with Fortran `!`:
 The restart-refresh edit is enabled only by `-swi_restart_refresh_passes 8`.
 No further source edits are needed for this guide.
 
-## 5. Configure PETSc on the login node
+## 5. Configure PETSc with runnable MPI probes (corrected)
 
-Use batch-aware configuration so PETSc does not assume its MPI runtime
-probes can run directly on the login node. This is different from the old
-all-in-one allocation script's `--with-batch=0`.
+The previous `--with-batch=1` recipe was incorrect for these dependencies.
+PETSc 3.21.5 explicitly marks downloaded HDF5 as unsupported in batch-aware
+configuration (and some Hypre configurations also prohibit it). The observed
+`--download-hdf5 cannot be used on this batch systems` error is an option
+conflict, not a compiler error. Do not delete or clone the sources again.
+
+Preserve the failed configure log before retrying, if present:
 
 ```bash
+cd "$PETSC_DIR"
+if test -f configure.log; then
+  cp configure.log "$BUILD_ROOT/audit/configure-batch-rejected-$(date +%Y%m%dT%H%M%S).log"
+fi
+salloc --account=m2398 --constraint=cpu --qos=debug \
+  --nodes=1 --ntasks=4 --time=00:30:00
+```
+
+Wait for the allocation to be granted. Run the following in its shell.
+Configuration builds downloaded dependencies too, so it may take more than a
+few minutes. Completion within 30 minutes is not guaranteed. No regular-QOS
+job is required. This configuration stage needs an allocation so its `srun`
+MPI probes can execute; after it succeeds, the main PETSc and PFLOTRAN make
+commands in step 7 can run on the login node.
+
+```bash
+set -o pipefail
 cd "$PETSC_DIR"
 python3 ./configure PETSC_ARCH="$PETSC_ARCH" \
   --with-cc=cc --with-cxx=CC --with-fc=ftn \
   '--with-mpiexec=srun --mpi=cray_shasta --cpu-bind=cores' \
-  --with-batch=1 --with-debugging=0 --with-make-np=4 \
+  --with-batch=0 --with-debugging=0 --with-make-np=4 \
   --COPTFLAGS=-O3 --CXXOPTFLAGS=-O3 --FOPTFLAGS=-O3 \
   --download-hdf5=yes --download-hdf5-fortran-bindings=yes \
   --download-fblaslapack=yes --download-metis=yes \
   --download-parmetis=yes --download-hypre=yes \
-  2>&1 | tee "$BUILD_ROOT/audit/configure-login.log"
+  2>&1 | tee "$BUILD_ROOT/audit/configure-retry.log"
+printf 'configure_pipeline_exit=%s\n' "$?"
 ```
 
-Stop on any configure error. If PETSc prints instructions to run
-`conftest-arch-cpe2603-gnu-cpu-opt`, configuration is not finished yet.
-PETSc 3.21.5 generates this executable to measure runtime properties, then
-writes `reconfigure-arch-cpe2603-gnu-cpu-opt.py` when it runs. Use the exact
-names printed by configure; with this PETSC_ARCH they should match below.
+Require exit zero and a configuration-complete message. Stop on errors or
+allocation timeout and inspect the log; do not chain debug jobs or proceed
+to make with an incomplete configuration. Do not run conftest/reconfigure
+commands from the previous batch-aware recipe.
 
-For that probe only, submit a short debug task from the login terminal:
+After successful configuration, leave the allocation shell:
 
 ```bash
-cd "$PETSC_DIR"
-srun --account=m2398 --constraint=cpu --qos=debug \
-  --nodes=1 --ntasks=1 --cpus-per-task=1 --time=00:05:00 \
-  --mpi=cray_shasta --cpu-bind=cores \
-  "./conftest-$PETSC_ARCH" 2>&1 | tee "$BUILD_ROOT/audit/configure-probe.log"
-python3 "./reconfigure-$PETSC_ARCH.py" \
-  2>&1 | tee "$BUILD_ROOT/audit/reconfigure-login.log"
+exit
 ```
 
-This `srun` waits for a compute allocation; it does not run on the login node.
-If configure completes without requesting a probe, skip these two commands.
-Do not invent `--known-*` values to bypass runtime checks. Continue only when
-PETSc reports configuration complete and its generated file exists:
+Back in the login shell, check the generated file, then continue with step 6:
 
 ```bash
 test -f "$PETSC_DIR/$PETSC_ARCH/lib/petsc/conf/petscvariables"
 ```
 
-This exact CPE/PETSc recipe has not yet been executed at NERSC. Dependency
-configuration errors should be diagnosed from logs, not suppressed.
+The corrected recipe still requires NERSC validation. Keep dependency build
+failures and MPI startup failures distinct when inspecting logs.
 
 ## 6. Explicitly remove and verify no `--oversubscribe`
 
@@ -318,7 +330,8 @@ coastal restart and full 50-year tests before production replacement.
 - https://docs.nersc.gov/policies/resource-usage/
 - https://docs.nersc.gov/development/programming-models/mpi/cray-mpich/
 - https://petsc.org/release/install/install/
-- PETSc 3.21.5 `config/BuildSystem/config/framework.py`, `configureBatch()`:
-  inspected for the conftest/reconfigure workflow used above.
+- PETSc 3.21.5 `config/BuildSystem/config/packages/HDF5.py` and
+  `config/BuildSystem/config/framework.py`: inspected for the batch-download
+  restriction. Configuration now uses `--with-batch=0` in an allocation.
 
 This is a prepared procedure, not evidence of a completed NERSC installation.
