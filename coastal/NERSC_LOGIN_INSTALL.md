@@ -121,23 +121,10 @@ configuration (and some Hypre configurations also prohibit it). The observed
 `--download-hdf5 cannot be used on this batch systems` error is an option
 conflict, not a compiler error. Do not delete or clone the sources again.
 
-Preserve the failed configure log before retrying, if present:
-
-```bash
-cd "$PETSC_DIR"
-if test -f configure.log; then
-  cp configure.log "$BUILD_ROOT/audit/configure-batch-rejected-$(date +%Y%m%dT%H%M%S).log"
-fi
-salloc --account=m2398 --constraint=cpu --qos=debug \
-  --nodes=1 --ntasks=4 --time=00:30:00
-```
-
-Wait for the allocation to be granted. Run the following in its shell.
-Configuration builds downloaded dependencies too, so it may take more than a
-few minutes. Completion within 30 minutes is not guaranteed. No regular-QOS
-job is required. This configuration stage needs an allocation so its `srun`
-MPI probes can execute; after it succeeds, the main PETSc and PFLOTRAN make
-commands in step 7 can run on the login node.
+The user subsequently completed this `--with-batch=0` configuration on
+login06, with `configure_exit=0`. No debug allocation is required by these
+installation instructions. If configuration has completed, skip to step 6.
+For a fresh installation, run the following on the login node:
 
 ```bash
 set -o pipefail
@@ -154,29 +141,14 @@ python3 ./configure PETSC_ARCH="$PETSC_ARCH" \
 printf 'configure_pipeline_exit=%s\n' "$?"
 ```
 
-Require exit zero and a configuration-complete message. Stop on errors or
-allocation timeout and inspect the log; do not chain debug jobs or proceed
-to make with an incomplete configuration. Do not run conftest/reconfigure
-commands from the previous batch-aware recipe.
-
-After successful configuration, leave the allocation shell:
-
-```bash
-exit
-```
-
-Back in the login shell, check the generated file, then continue with step 6:
-
-```bash
-test -f "$PETSC_DIR/$PETSC_ARCH/lib/petsc/conf/petscvariables"
-```
-
-The corrected recipe still requires NERSC validation. Keep dependency build
-failures and MPI startup failures distinct when inspecting logs.
+Require exit zero and a configuration-complete message before continuing.
+Successful configuration does not establish PETSc/PFLOTRAN compilation or
+MPI runtime acceptance.
 
 ## 6. Explicitly remove and verify no `--oversubscribe`
 
-Run after configuration and again after any reconfiguration. This edits only
+This is a required check of the actual generated file, not just the
+configure summary. Run after configuration and again after any reconfiguration. This edits only
 the NEW installation's generated file and preserves its original contents.
 The chosen `srun` launcher should already omit this Open-MPI option; in that
 case this step reports zero removals and leaves the file unchanged.
@@ -210,14 +182,47 @@ Keep `MPIEXEC` as `srun ...`; do not substitute the old Open-MPI launcher.
 Run one command at a time and stop on any nonzero exit:
 
 ```bash
+set -o pipefail
 cd "$PETSC_DIR"
 make PETSC_DIR="$PETSC_DIR" PETSC_ARCH="$PETSC_ARCH" -j4 all \
   2>&1 | tee "$BUILD_ROOT/audit/petsc-build.log"
+printf 'petsc_build_exit=%s\n' "$?"
+```
 
+Stop if the PETSc build exit is nonzero. After a successful build, explicitly
+export the PETSc paths for the subsequent PFLOTRAN build:
+
+```bash
+export PETSC_DIR=/global/homes/c/cliu6/Software/pflotran-v5.0-auxrefresh1-cpe2603/src/petsc
+export PETSC_ARCH=arch-cpe2603-gnu-cpu-opt
+```
+
+These repeat the earlier exports for clarity. Make command-line assignments
+do not export variables into the parent shell; prior exports persist within
+the same shell. Recheck the generated file before building PFLOTRAN:
+
+```bash
+python3 - <<'PY'
+import os
+from pathlib import Path
+p = Path(os.environ['PETSC_DIR']) / os.environ['PETSC_ARCH'] / 'lib/petsc/conf/petscvariables'
+assert '--oversubscribe' not in p.read_text(), 'Repeat the removal in step 6'
+print('Verified no --oversubscribe:', p)
+PY
+```
+
+Only after the check succeeds:
+
+```bash
 cd "$PFLOTRAN_DIR/src/pflotran"
 make PETSC_DIR="$PETSC_DIR" PETSC_ARCH="$PETSC_ARCH" -j4 pflotran \
   2>&1 | tee "$BUILD_ROOT/audit/pflotran-build.log"
+printf 'pflotran_build_exit=%s\n' "$?"
+```
 
+Stop on a nonzero build exit. On success:
+
+```bash
 test -x pflotran
 cp -n pflotran "$PFLOTRAN_EXE_NEW"
 sha256sum "$PFLOTRAN_EXE_NEW" | tee "$BUILD_ROOT/audit/executable.sha256"
@@ -332,6 +337,8 @@ coastal restart and full 50-year tests before production replacement.
 - https://petsc.org/release/install/install/
 - PETSc 3.21.5 `config/BuildSystem/config/packages/HDF5.py` and
   `config/BuildSystem/config/framework.py`: inspected for the batch-download
-  restriction. Configuration now uses `--with-batch=0` in an allocation.
+  restriction. Configuration uses `--with-batch=0`; successful login-node
+  configuration was reported by the user.
 
-This is a prepared procedure, not evidence of a completed NERSC installation.
+User evidence confirms login-node configuration succeeded. Compilation and
+runtime acceptance still require their own successful logs.
