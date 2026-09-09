@@ -2,6 +2,11 @@
 
 Maintainer: Chuyang Liu.
 
+**Already configured successfully? Start at step 6, not deletion or cloning.**
+The required sequence is: check/remove oversubscribe (6), make PETSc (7),
+export PETSc paths (8), make PFLOTRAN (9), prepare the quick test (10), and
+run it (11). Configuration alone does not build the PETSc library or PFLOTRAN.
+
 ## Status and scope
 
 The supplied terminal output shows build job 58107545 ran for eight minutes,
@@ -177,7 +182,7 @@ grep -nE '^(MPIEXEC|MPIEXEC_FLAGS)[[:space:]]*=' \
 
 Keep `MPIEXEC` as `srun ...`; do not substitute the old Open-MPI launcher.
 
-## 7. Compile PETSc, then PFLOTRAN on the login node
+## 7. Build PETSc: make all
 
 Run one command at a time and stop on any nonzero exit:
 
@@ -189,7 +194,11 @@ make PETSC_DIR="$PETSC_DIR" PETSC_ARCH="$PETSC_ARCH" -j4 all \
 printf 'petsc_build_exit=%s\n' "$?"
 ```
 
-Stop if the PETSc build exit is nonzero. After a successful build, explicitly
+Stop if the PETSc build exit is nonzero.
+
+## 8. Export PETSc paths after make
+
+After a successful build, explicitly
 export the PETSc paths for the subsequent PFLOTRAN build:
 
 ```bash
@@ -210,6 +219,8 @@ assert '--oversubscribe' not in p.read_text(), 'Repeat the removal in step 6'
 print('Verified no --oversubscribe:', p)
 PY
 ```
+
+## 9. Build PFLOTRAN: make pflotran
 
 Only after the check succeeds:
 
@@ -235,7 +246,7 @@ Stop if `ldd` reports missing libraries or unexpected Open-MPI linkage.
 Compilation is only confirmed after both make commands exit successfully and
 the executable exists. Do not run the old all-in-one build script in parallel.
 
-## 8. Stage a tiny regression case on scratch
+## 10. Prepare the quick test
 
 This is the upstream 20-cell calcite installation test, not a coastal
 historical acceptance or restart-continuity test. Preserve its inputs and gold
@@ -250,7 +261,7 @@ cp "$PFLOTRAN_DIR/database/hanford.dat" "$TEST_ROOT/database/"
 printf '%s\n' "$TEST_ROOT" | tee "$BUILD_ROOT/audit/latest-smoke-path.txt"
 ```
 
-## 9. One bounded direct login-node test
+## 11. Run the quick test on the login node
 
 Run only one test instance for at most two minutes. This simplified setup
 does not force library thread counts; stop the test if it consumes excessive
@@ -273,7 +284,7 @@ time limit. A PMI/libfabric/MPI startup error is not proof of solver failure.
 Do not unset rank variables or swap MPI libraries speculatively. This direct
 singleton attempt is unvalidated on this stack; stop after a failure.
 
-For a failed singleton attempt, preserve its directory and repeat step 8 to
+For a failed singleton attempt, preserve its directory and repeat step 10 to
 create a NEW test directory. Then use the supported one-rank compute launch:
 
 ```bash
@@ -295,7 +306,7 @@ The regression runner may impose its own timeout while waiting in the queue;
 inspect a timeout rather than declaring a solver failure. Do not chain debug
 jobs. Multi-rank PETSc checks and coastal tests remain required separately.
 
-## 10. PETSc installation check on a short compute allocation
+## 12. Additional PETSc MPI check (separate from the login quick test)
 
 From the login terminal, request an allocation for the MPI checks:
 
