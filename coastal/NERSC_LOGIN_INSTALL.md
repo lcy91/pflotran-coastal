@@ -4,8 +4,8 @@ Maintainer: Chuyang Liu.
 
 **Already configured successfully? Start at step 6, not deletion or cloning.**
 The required sequence is: check/remove oversubscribe (6), make PETSc (7),
-export PETSc paths (8), make PFLOTRAN (9), prepare the quick test (10), and
-run it (11). Configuration alone does not build the PETSc library or PFLOTRAN.
+export PETSc paths (8), run PETSc make check (9), make PFLOTRAN (10),
+prepare the quick test (11), and run it (12). Configuration alone does not build the PETSc library or PFLOTRAN.
 
 ## Status and scope
 
@@ -206,6 +206,29 @@ export PETSC_DIR=/global/homes/c/cliu6/Software/pflotran-v5.0-auxrefresh1-cpe260
 export PETSC_ARCH=arch-cpe2603-gnu-cpu-opt
 ```
 
+## 9. Check PETSc: make check
+
+Run PETSc's own installation check before compiling PFLOTRAN:
+
+```bash
+cd "$PETSC_DIR"
+set -o pipefail
+make PETSC_DIR="$PETSC_DIR" PETSC_ARCH="$PETSC_ARCH" check \
+  2>&1 | tee "$BUILD_ROOT/audit/petsc-check.log"
+printf 'petsc_check_exit=%s\n' "$?"
+```
+
+Require exit zero and passing test output. This is separate from PFLOTRAN's
+calcite regression test below. Compilation alone does not replace this check.
+
+**Launcher distinction:** the configured MPIEXEC is `/usr/bin/srun
+--mpi=cray_shasta --cpu-bind=cores`. Thus, although `make check` is entered
+from the login terminal, its MPI tests use Slurm; they are not guaranteed to
+execute directly on the login node. Without an allocation, srun may request
+resources or report missing job options. If that happens, retain the error;
+do not replace MPIEXEC with a dummy command or declare the tests passed.
+The separate allocation procedure in step 13 can run the same check if needed.
+
 These repeat the earlier exports for clarity. Make command-line assignments
 do not export variables into the parent shell; prior exports persist within
 the same shell. Recheck the generated file before building PFLOTRAN:
@@ -220,7 +243,7 @@ print('Verified no --oversubscribe:', p)
 PY
 ```
 
-## 9. Build PFLOTRAN: make pflotran
+## 10. Build PFLOTRAN: make pflotran
 
 Only after the check succeeds:
 
@@ -246,7 +269,7 @@ Stop if `ldd` reports missing libraries or unexpected Open-MPI linkage.
 Compilation is only confirmed after both make commands exit successfully and
 the executable exists. Do not run the old all-in-one build script in parallel.
 
-## 10. Prepare the quick test
+## 11. Prepare the quick test
 
 This is the upstream 20-cell calcite installation test, not a coastal
 historical acceptance or restart-continuity test. Preserve its inputs and gold
@@ -261,7 +284,7 @@ cp "$PFLOTRAN_DIR/database/hanford.dat" "$TEST_ROOT/database/"
 printf '%s\n' "$TEST_ROOT" | tee "$BUILD_ROOT/audit/latest-smoke-path.txt"
 ```
 
-## 11. Run the quick test on the login node
+## 12. Run the quick test on the login node
 
 Run only one test instance for at most two minutes. This simplified setup
 does not force library thread counts; stop the test if it consumes excessive
@@ -284,7 +307,7 @@ time limit. A PMI/libfabric/MPI startup error is not proof of solver failure.
 Do not unset rank variables or swap MPI libraries speculatively. This direct
 singleton attempt is unvalidated on this stack; stop after a failure.
 
-For a failed singleton attempt, preserve its directory and repeat step 10 to
+For a failed singleton attempt, preserve its directory and repeat step 11 to
 create a NEW test directory. Then use the supported one-rank compute launch:
 
 ```bash
@@ -306,9 +329,11 @@ The regression runner may impose its own timeout while waiting in the queue;
 inspect a timeout rather than declaring a solver failure. Do not chain debug
 jobs. Multi-rank PETSc checks and coastal tests remain required separately.
 
-## 12. Additional PETSc MPI check (separate from the login quick test)
+## 13. Allocation fallback for PETSc make check (only if needed)
 
-From the login terminal, request an allocation for the MPI checks:
+If step 9 already passed, do not repeat it. If it could not launch MPI tests
+without an allocation, this runs that same check with allocated resources.
+From the login terminal:
 
 ```bash
 salloc --account=m2398 --constraint=cpu --qos=debug \
