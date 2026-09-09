@@ -8,9 +8,9 @@ The supplied terminal output shows build job 58107545 ran for eight minutes,
 then `scancel -u cliu6` was issued. That command cancels all the user's jobs;
 do not repeat it to manage one build. The expected new executable was absent.
 Neither PETSc nor PFLOTRAN compilation can be certified from that transcript.
-Preserve this partial installation and its logs. This guide uses a distinct
-`login1` directory and does not edit the original `Software/petsc` or
-`Software/pflotran` installations.
+The user has explicitly authorized deletion of this interrupted installation
+and reinstallation at the same path. This guide does not edit the original
+`Software/petsc` or `Software/pflotran` installations.
 
 Sources, libraries, build objects and build logs are in home. Model test files
 and outputs are on scratch. New source is pinned to the published `home1` tag.
@@ -24,17 +24,25 @@ short compute allocation. A direct login-node singleton test is bounded to
 solver correctness. It is not a certified NERSC singleton launch pattern.
 Do not switch MPI libraries to work around that failure.
 
-## 1. Inspect the interrupted build (read-only)
+## 1. Delete only the interrupted installation, then reuse its path
+
+User-authorized deletion: this removes all partial sources, dependencies and
+logs within the named experimental directory. First inspect `squeue` and
+confirm no active build uses this directory; do not cancel unrelated jobs.
 
 ```bash
-sacct -j 58107545 --format=JobID,State,Elapsed,ExitCode
 squeue -u cliu6
-OLD_BUILD=/global/homes/c/cliu6/Software/pflotran-v5.0-auxrefresh1-cpe2603
-tail -n 60 "$OLD_BUILD/src/pflotran/build_58107545.out"
-tail -n 40 "$OLD_BUILD/src/pflotran/build_58107545.err"
 ```
 
-A missing log is information to retain, not a reason to delete directories.
+Once no job is using it, leave the directory before deleting it:
+
+```bash
+cd /global/homes/c/cliu6/Software
+rm -rf -- /global/homes/c/cliu6/Software/pflotran-v5.0-auxrefresh1-cpe2603
+```
+
+Do not substitute `Software`, `Software/petsc`, or `Software/pflotran` in this
+command. Continue below to create the same experimental directory afresh.
 
 ## 2. Load the CPU compiler environment in a fresh Bash login shell
 
@@ -44,28 +52,24 @@ reporting so `tee` cannot hide configure/make errors:
 ```bash
 set -o pipefail
 showquota
-source /opt/cray/pe/cpe/26.03/restore_lmod_system_defaults.sh
 module load cpe/26.03
 module load PrgEnv-gnu
 module load cpu
 module load cmake
 module list
 command -v cc CC ftn python3 cmake timeout
-srun --mpi=list
-export MPICH_GPU_SUPPORT_ENABLED=0
-export OMP_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
-export CRAYPE_LINK_TYPE=dynamic
 ```
 
-The restore script above is the exact 26.03 path printed by Lmod in your
-transcript. Stop if unavailable. Confirm Cray MPICH, no Open MPI, and
-`cray_shasta`. Do not change `.bashrc`, global PATH, or old installation links.
+Confirm `module list` shows the intended CPU/GNU/Cray-MPICH environment.
+The simplified setup omits the restore script and optional environment
+settings at the user's request. If module loading or linking fails, preserve
+the actual error for diagnosis rather than silently changing the MPI stack.
+No shell startup files or original installation links are changed.
 
 ## 3. Create and clone the new installation
 
 ```bash
-export BUILD_ROOT=/global/homes/c/cliu6/Software/pflotran-v5.0-auxrefresh1-cpe2603-login1
+export BUILD_ROOT=/global/homes/c/cliu6/Software/pflotran-v5.0-auxrefresh1-cpe2603
 mkdir "$BUILD_ROOT" && mkdir -p "$BUILD_ROOT/src" "$BUILD_ROOT/audit" "$BUILD_ROOT/bin"
 ```
 
@@ -231,7 +235,9 @@ printf '%s\n' "$TEST_ROOT" | tee "$BUILD_ROOT/audit/latest-smoke-path.txt"
 
 ## 9. One bounded direct login-node test
 
-Run only one instance, with one thread, for at most two minutes:
+Run only one test instance for at most two minutes. This simplified setup
+does not force library thread counts; stop the test if it consumes excessive
+login-node resources:
 
 ```bash
 cd "$TEST_ROOT"
@@ -296,7 +302,7 @@ allocated node. Do not treat `make check` as a completed coastal-science gate.
 ## Future sessions
 
 ```bash
-export BUILD_ROOT=/global/homes/c/cliu6/Software/pflotran-v5.0-auxrefresh1-cpe2603-login1
+export BUILD_ROOT=/global/homes/c/cliu6/Software/pflotran-v5.0-auxrefresh1-cpe2603
 export PFLOTRAN_DIR="$BUILD_ROOT/src/pflotran"
 export PETSC_DIR="$BUILD_ROOT/src/petsc"
 export PETSC_ARCH=arch-cpe2603-gnu-cpu-opt
