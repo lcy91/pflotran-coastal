@@ -29,9 +29,11 @@ short compute allocation. A direct login-node singleton test is bounded to
 solver correctness. It is not a certified NERSC singleton launch pattern.
 Do not switch MPI libraries to work around that failure.
 
-## 1. Delete only the interrupted installation, then reuse its path
+## 1. Historical cleanup — already completed; skip for the current build
 
-User-authorized deletion: this removes all partial sources, dependencies and
+The user has already completed this deletion and successfully configured the
+replacement. Do not repeat it for the current build. The historical command
+below removes all partial sources, dependencies and
 logs within the named experimental directory. First inspect `squeue` and
 confirm no active build uses this directory; do not cancel unrelated jobs.
 
@@ -229,7 +231,7 @@ resources or report missing job options. If that happens, retain the error;
 do not replace MPIEXEC with a dummy command or declare the tests passed.
 The separate allocation procedure in step 13 can run the same check if needed.
 
-These repeat the earlier exports for clarity. Make command-line assignments
+The exports in step 8 repeat earlier settings for clarity. Make command-line assignments
 do not export variables into the parent shell; prior exports persist within
 the same shell. Recheck the generated file before building PFLOTRAN:
 
@@ -258,13 +260,20 @@ Stop on a nonzero build exit. On success:
 
 ```bash
 test -x pflotran
-cp -n pflotran "$PFLOTRAN_EXE_NEW"
+if test -e "$PFLOTRAN_EXE_NEW"; then
+  cmp pflotran "$PFLOTRAN_EXE_NEW"
+else
+  cp pflotran "$PFLOTRAN_EXE_NEW"
+fi
+cmp pflotran "$PFLOTRAN_EXE_NEW"
 sha256sum "$PFLOTRAN_EXE_NEW" | tee "$BUILD_ROOT/audit/executable.sha256"
 ldd "$PFLOTRAN_EXE_NEW" | tee "$BUILD_ROOT/audit/ldd.txt"
 showquota
 du -sh "$BUILD_ROOT"
 ```
 
+Stop if either `cmp` reports different files; preserve the existing binary
+and choose a new executable name before proceeding. Do not test a stale copy.
 Stop if `ldd` reports missing libraries or unexpected Open-MPI linkage.
 Compilation is only confirmed after both make commands exit successfully and
 the executable exists. Do not run the old all-in-one build script in parallel.
@@ -273,10 +282,13 @@ the executable exists. Do not run the old all-in-one build script in parallel.
 
 This is the upstream 20-cell calcite installation test, not a coastal
 historical acceptance or restart-continuity test. Preserve its inputs and gold
-reference. Use a unique temporary directory and the original relative layout:
+reference. Use a unique temporary directory and the original relative layout.
+Stop if mktemp or its directory check fails:
 
 ```bash
-export TEST_ROOT=$(mktemp -d /pscratch/sd/c/cliu6/NERSC_notebooks/Norfolk/pflotran-login-smoke.XXXXXX)
+TEST_ROOT=$(mktemp -d /pscratch/sd/c/cliu6/NERSC_notebooks/Norfolk/pflotran-login-smoke.XXXXXX)
+export TEST_ROOT
+test -n "$TEST_ROOT" && test -d "$TEST_ROOT"
 export TEST_CASE="$TEST_ROOT/regression_tests/ascem/1d/1d-calcite"
 mkdir -p "$TEST_CASE" "$TEST_ROOT/database"
 cp "$PFLOTRAN_DIR"/regression_tests/ascem/1d/1d-calcite/* "$TEST_CASE/"
@@ -351,6 +363,98 @@ exit
 
 The PETSc-generated `MPIEXEC=srun ...` launches the test executables on the
 allocated node. Do not treat `make check` as a completed coastal-science gate.
+
+## 14. Complete PFLOTRAN installation check: serial AND two-rank tests
+
+The original instructions ended with:
+
+```bash
+export PFLOTRAN_DIR="$BUILD_ROOT/src/pflotran"
+cd "$PFLOTRAN_DIR/regression_tests"
+make check
+```
+
+This is a reference to the original command, not an extra command to run
+alongside the procedure below. In PFLOTRAN v5.0 it selects `standard` and
+`standard_parallel` from the calcite configuration. The quick test in step
+12 covers only the serial test; it does not replace this complete check.
+
+Two implementation details matter in this exact version:
+
+- The regression makefile prefixes its Python command with `-`, so make can
+  ignore a failed test command. Require the regression runner's actual result.
+- The runner treats `--mpiexec` as one executable path and appends `-np N`.
+  Passing the full `srun --mpi=...` command as that path is incorrect. The
+  supplied `coastal/mpi-test-launch.sh` translates `-np N` to Slurm arguments.
+
+For the complete check, repeat step 11 to create a NEW scratch test directory,
+then use a short allocation for the two-rank MPI test. This validates MPI
+runtime behavior; it is not an installation/build allocation.
+
+```bash
+salloc --account=m2398 --constraint=cpu --qos=debug \
+  --nodes=1 --ntasks=2 --time=00:10:00
+```
+
+Once granted, run the same two suites selected by `make check`, directly via
+the runner so its exit code is visible. The serial wrapper uses `srun -n 1`;
+the MPI wrapper uses the requested two ranks. Both wrappers are in the pinned
+tag, and the serial wrapper uses `$BUILD_ROOT/bin/pflotran-coastal-diag1`.
+
+```bash
+cd "$TEST_ROOT"
+set -o pipefail
+python3 "$PFLOTRAN_DIR/regression_tests/regression_tests.py" \
+  -e "$PFLOTRAN_DIR/coastal/serial-test-launch.sh" \
+  --suite standard --config-files "$TEST_CASE/1d-calcite.cfg" \
+  2>&1 | tee "$TEST_ROOT/pflotran-check-serial.log"
+printf 'pflotran_serial_check_exit=%s\n' "$?"
+```
+
+Require zero and a pass before continuing:
+
+```bash
+python3 "$PFLOTRAN_DIR/regression_tests/regression_tests.py" \
+  -e "$PFLOTRAN_EXE_NEW" \
+  --mpiexec "$PFLOTRAN_DIR/coastal/mpi-test-launch.sh" \
+  --suite standard_parallel --config-files "$TEST_CASE/1d-calcite.cfg" \
+  2>&1 | tee "$TEST_ROOT/pflotran-check-parallel.log"
+printf 'pflotran_parallel_check_exit=%s\n' "$?"
+```
+
+Require zero, a pass, and no skipped parallel test. Release this allocation:
+
+```bash
+exit
+```
+
+If only the login quick test has passed, record the parallel installation
+check as pending. Do not describe it as completed. These calcite tests use
+the default restart-refresh setting and do not exercise the coastal patch.
+Separate coastal historical/future restart tests with
+`-swi_restart_refresh_passes 8` are still required before production use.
+
+## Comparison with the original installation recipe
+
+| Original action | Current equivalent |
+| --- | --- |
+| GCC/OpenMPI/CMake modules | CPE 26.03 + PrgEnv-gnu + cpu + cmake, as requested |
+| PETSc v3.21.5 checkout | Same version, exact commit checked |
+| mpicc/mpicxx/mpif90 | cc/CC/ftn Cray compiler wrappers for the new MPI stack |
+| Optimization -O3 | COPTFLAGS/CXXOPTFLAGS/FOPTFLAGS=-O3 |
+| HDF5 with Fortran, BLAS/LAPACK, METIS, ParMETIS, Hypre | All retained; configure output confirms dependencies |
+| Download CMake | Intentionally omitted; loaded CMake 3.30.2 supplies it |
+| Delete --oversubscribe | Explicit backup/removal/verification of new petscvariables, step 6 |
+| PETSc make all | Step 7 |
+| Export PETSC_DIR/PETSC_ARCH after make | Step 8 |
+| PETSc make check | Step 9 (allocation fallback only if needed) |
+| PFLOTRAN v5.0 checkout | Pinned downstream based on exact upstream v5.0 |
+| Comment hydrostatic SALINITY error | Included and inspected in step 4 |
+| Local restart-density diagnostic | Included, opt-in; not enabled by the basic calcite test |
+| PFLOTRAN make pflotran | Step 10 |
+| Export PFLOTRAN_DIR | Step 3 and explicitly shown again in step 14 |
+| PFLOTRAN regression_tests/make check | Both suites restored in step 14, with reliable error reporting |
+| Original installations | Preserved; all new build paths are isolated |
 
 ## Future sessions
 
