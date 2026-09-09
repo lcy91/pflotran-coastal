@@ -44,7 +44,8 @@ The old installation used Open MPI 5.0.3; the unversioned module may select a
 different release today. Record the actual version; require Open MPI 5.x or
 newer for the currently supported Perlmutter Slingshot path. Do not silently
 load Cray MPICH afterward or use `cc`, `CC`, `ftn` for this recipe. No CPE
-26.03 version is forced. The loaded CMake replaces `--download-cmake`.
+26.03 version is forced. The configure command retains `--download-cmake=yes` to match the user
+recipe, although the loaded CMake may already be sufficient.
 
 ## 3. Create a distinctly named installation and clone sources
 
@@ -93,16 +94,13 @@ refresh remains opt-in via `-swi_restart_refresh_passes 8`; default is zero.
 
 ```bash
 cd "$PETSC_DIR"
-python3 ./configure PETSC_ARCH="$PETSC_ARCH" \
-  --with-cc="$(command -v mpicc)" \
-  --with-cxx="$(command -v mpicxx)" \
-  --with-fc="$(command -v mpif90)" \
-  --with-mpiexec="$COASTAL_MPIEXEC" \
-  --with-batch=0 --with-debugging=0 --with-make-np=4 \
-  --COPTFLAGS=-O3 --CXXOPTFLAGS=-O3 --FOPTFLAGS=-O3 \
+./configure \
+  --CFLAGS='-O3' --CXXFLAGS='-O3' --FFLAGS='-O3' \
+  --with-cc=mpicc --with-cxx=mpicxx --with-fc=mpif90 \
+  --with-debugging=no \
   --download-hdf5=yes --download-hdf5-fortran-bindings=yes \
   --download-fblaslapack=yes --download-metis=yes \
-  --download-parmetis=yes --download-hypre=yes \
+  --download-parmetis=yes --download-hypre=yes --download-cmake=yes \
   2>&1 | tee "$BUILD_ROOT/audit/configure-openmpi.log"
 printf 'configure_exit=%s\n' "$?"
 ```
@@ -249,3 +247,52 @@ References:
 - https://docs.nersc.gov/development/programming-models/mpi/openmpi/
 - https://docs.nersc.gov/policies/resource-usage/
 - https://petsc.org/release/install/install/
+
+## Current reported installation evidence and additional CONUS debug test
+
+User transcript confirms PETSc build exit 0; PETSc C/C++ one/two-rank,
+HYPRE, HDF5 and Fortran checks succeeded; PFLOTRAN build exit 0; copied
+binary matches the built binary. Its SHA-256 is
+`ac45879212d37bca11a838019e8f14c2484bde1db8b33363f144c94ba5bd9188`.
+ldd resolves the new PETSc and Open MPI 5.0.7 dependencies without missing
+entries. Compiler warnings are retained; this is not proof of scientific
+correctness. The login PFLOTRAN test command returned but its log/pass status
+was not included. Inspect, without rerunning:
+
+```bash
+cat /pscratch/sd/c/cliu6/NERSC_notebooks/Norfolk/pflotran-openmpi-smoke.jMKYrF/pflotran-check.log
+```
+
+Additional manual-upload bundle: `deploy/conus_openmpi_diag1_debug.tar.gz`
+and its adjacent SHA-256 file. After uploading to Norfolk scratch:
+
+```bash
+cd /pscratch/sd/c/cliu6/NERSC_notebooks/Norfolk
+sha256sum -c conus_openmpi_diag1_debug.tar.gz.sha256
+test ! -e conus_openmpi_diag1_debug && tar -xzf conus_openmpi_diag1_debug.tar.gz
+cd conus_openmpi_diag1_debug
+sbatch --export=ALL submit-conus-openmpi-debug.sh
+```
+
+Stop if the extraction destination already exists; do not extract over results.
+The job script explicitly exports BUILD_ROOT, PETSC_DIR, PETSC_ARCH,
+PFLOTRAN_DIR, PFLOTRAN_EXE_NEW and COASTAL_MPIEXEC after loading pinned modules.
+It pins the reported binary checksum and runs two sequential one-rank CONUS
+24-hour restart tests (historical and S15) with `-swi_restart_refresh_passes 8`.
+All inputs/results are isolated in scratch. Checkpoints are diagnostic states,
+not accepted histories. Require both per-case DIAGNOSTIC_PASS.json files and
+TWO_CASE_GATE_PASSED.json. The ledger checker verifies finite entries, strictly
+increasing times, every hour 1–24 and the 24-hour endpoint. Inputs are checksum
+verified before/after each run. Inspect stderr and accounting as well:
+
+```bash
+# Replace JOBID with the submitted debug job number.
+sacct -j JOBID --format=JobID,State,Elapsed,AllocCPUS,TotalCPU,ExitCode
+seff JOBID
+tail -n 50 conus_openmpi_JOBID.out
+tail -n 50 conus_openmpi_JOBID.err
+```
+
+This gate is not a fresh spinup, historical acceptance, a 50-year future run,
+or sustained 128-core validation. No new NERSC debug run has yet been submitted
+by the assistant. Do not use smoke-cpe2603.slurm for this Open MPI installation.
