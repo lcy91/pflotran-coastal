@@ -180,6 +180,7 @@ subroutine SimSubsurfInitializeRun(this)
   PetscViewer :: viewer
   PetscBool :: flag
   PetscErrorCode :: ierr
+  PetscInt :: swi_refresh_passes, swi_pass
 
 #ifdef DEBUG
   call PrintMsg(this%option,'SimSubsurfInitializeRun()')
@@ -242,6 +243,18 @@ subroutine SimSubsurfInitializeRun(this)
 
   ! initialize performs overwrite of restart, if applicable
   call this%process_model_coupler_list%InitializeRun()
+  ! DIAGNOSTIC ONLY: repeat initialization without advancing physical time.
+  ! Default zero is the original path. This is not a production repair.
+  swi_refresh_passes = 0
+  call PetscOptionsGetInt(PETSC_NULL_OPTIONS,PETSC_NULL_CHARACTER, &
+    '-swi_restart_refresh_passes',swi_refresh_passes,flag,ierr)
+  CHKERRQ(ierr)
+  if (this%option%restart_flag .and. &
+      this%option%flow%density_depends_on_salinity) then
+    do swi_pass = 1, swi_refresh_passes
+      call this%process_model_coupler_list%InitializeRun()
+    enddo
+  endif
   call this%JumpStart()
 
   call SimulationBaseInputRecordPrint(this,this%option)
