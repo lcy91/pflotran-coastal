@@ -11,7 +11,16 @@
 #SBATCH --error=build_%j.err
 set -euo pipefail
 : "${BUILD_ROOT:?Export the new isolated BUILD_ROOT before sbatch}"
-case "$BUILD_ROOT" in /pscratch/sd/c/cliu6/*) ;; *) echo 'Use a new directory under your scratch allocation.' >&2; exit 2;; esac
+# Restrict builds to a distinct installation beside the original software.
+case "$(basename "$BUILD_ROOT")" in
+  pflotran-v5.0-auxrefresh1-cpe2603*) ;;
+  *) echo 'Use a new pflotran-v5.0-auxrefresh1-cpe2603 directory under Software.' >&2; exit 2;;
+esac
+software_parent=$(cd /global/homes/c/cliu6/Software && pwd -P)
+build_parent=$(cd "$(dirname "$BUILD_ROOT")" && pwd -P)
+test "$build_parent" = "$software_parent" && test ! -L "$BUILD_ROOT" || {
+  echo 'BUILD_ROOT must be a separate, non-symlink directory directly under home Software.' >&2; exit 2;
+}
 export PFLOTRAN_DIR="$BUILD_ROOT/src/pflotran"
 export PETSC_DIR="$BUILD_ROOT/src/petsc"
 export PETSC_ARCH=arch-cpe2603-gnu-cpu-opt

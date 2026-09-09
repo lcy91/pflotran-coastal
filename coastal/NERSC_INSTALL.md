@@ -1,7 +1,8 @@
 # Separate Perlmutter CPU installation — Chuyang Liu
 
 This recipe creates a new experimental installation. It does not modify
-`~/Software/petsc`, `~/Software/pflotran`, the older Open-MPI build, shell
+`/global/homes/c/cliu6/Software/petsc`,
+`/global/homes/c/cliu6/Software/pflotran`, the older Open-MPI build, shell
 startup files, production job scripts, or existing results.
 
 CPE 26.03 is listed in NERSC's August 2026 environment update. Use its Cray
@@ -12,6 +13,7 @@ make; PETSc downloads/builds its needed libraries.
 ## 1. Start a fresh NERSC login shell and inspect modules
 
 ```bash
+showquota
 module reset
 module load cpe/26.03
 module load PrgEnv-gnu
@@ -31,10 +33,10 @@ again. Do not copy the old 24.07 restore path blindly. If a requested module
 is unavailable, stop and record `module spider cpe/26.03`; do not silently
 substitute a different compiler stack.
 
-## 2. Create an isolated scratch directory and clone pinned sources
+## 2. Create an isolated home Software directory and clone pinned sources
 
 ```bash
-export BUILD_ROOT=/pscratch/sd/c/cliu6/NERSC_notebooks/Norfolk/software/pflotran-v5.0-auxrefresh1-cpe2603
+export BUILD_ROOT=/global/homes/c/cliu6/Software/pflotran-v5.0-auxrefresh1-cpe2603
 if test -e "$BUILD_ROOT"; then
   echo 'Directory already exists: choose a new BUILD_ROOT; do not overwrite it.'
 else
@@ -45,7 +47,7 @@ fi
 Proceed only with a newly created directory:
 
 ```bash
-git clone --branch coastal-v5.0-auxrefresh-diag1 --single-branch \
+git clone --branch coastal-v5.0-auxrefresh-diag1-home1 --depth 1 --single-branch \
   https://github.com/lcy91/pflotran-coastal.git "$BUILD_ROOT/src/pflotran"
 git clone --branch v3.21.5 --depth 1 \
   https://gitlab.com/petsc/petsc.git "$BUILD_ROOT/src/petsc"
@@ -58,10 +60,18 @@ Record the PFLOTRAN release-tag commit. A tag identifies the source; the build
 also records exact compiler/module versions and executable checksum. Keep
 these records because CPE module dependencies can change over time.
 
-Scratch avoids the nearly full home inode quota, but is not permanent
-software storage. Retain the source tag and audit externally. After validation,
-a project software location can be considered if available and authorized;
-relocating shared libraries may require rebuilding because of embedded paths.
+The latest user-reported home quota is 24.47 GiB / 40 GiB and 684.83K /
+1.00M inodes: approximately 15.53 GiB and 315K inodes remain. These are
+available headroom, not a measured build-space requirement. Use `showquota`
+before and after building; shallow clones reduce unnecessary Git history.
+Sources, compiled dependencies, executable and build audit stay under this
+new home directory. Keep this directory in place because shared libraries
+may contain absolute paths. The existing `Software/petsc` and
+`Software/pflotran` directories are never build targets.
+
+Model smoke tests and production outputs remain on scratch. Small installation
+regression outputs are generated within the new source tree by the build job.
+This home-software/scratch-model-data split follows NERSC's filesystem guidance.
 
 ## 3. Submit the isolated build and basic tests
 
@@ -125,6 +135,8 @@ New executable:
 ```bash
 export PFLOTRAN_EXE_NEW="$BUILD_ROOT/bin/pflotran-coastal-diag1"
 sha256sum "$PFLOTRAN_EXE_NEW"
+showquota
+du -sh "$BUILD_ROOT"
 ```
 
 No global PATH change is needed. Your old executable stays at its old path.
@@ -145,16 +157,18 @@ sha256sum -c pflotran_coastal_diag1_smoke_cases.tar.gz.sha256
 test ! -e pflotran_coastal_diag1_smoke_cases && \
   tar -xzf pflotran_coastal_diag1_smoke_cases.tar.gz
 export CASE_DIR="$PWD/pflotran_coastal_diag1_smoke_cases/historical_35047"
-cd "$BUILD_ROOT/src/pflotran"
-sbatch --export=ALL,BUILD_ROOT="$BUILD_ROOT",CASE_DIR="$CASE_DIR" coastal/smoke-cpe2603.slurm
+cd "$CASE_DIR"
+sbatch --export=ALL,BUILD_ROOT="$BUILD_ROOT",CASE_DIR="$CASE_DIR" \
+  "$BUILD_ROOT/src/pflotran/coastal/smoke-cpe2603.slurm"
 ```
 
 After reviewing the historical result, submit the distinct future test:
 
 ```bash
 export CASE_DIR=/pscratch/sd/c/cliu6/NERSC_notebooks/Norfolk/pflotran_coastal_diag1_smoke_cases/future_S15_35047
-cd "$BUILD_ROOT/src/pflotran"
-sbatch --export=ALL,BUILD_ROOT="$BUILD_ROOT",CASE_DIR="$CASE_DIR" coastal/smoke-cpe2603.slurm
+cd "$CASE_DIR"
+sbatch --export=ALL,BUILD_ROOT="$BUILD_ROOT",CASE_DIR="$CASE_DIR" \
+  "$BUILD_ROOT/src/pflotran/coastal/smoke-cpe2603.slurm"
 ```
 
 Each requests one debug node for at most 30 minutes, runs one 24-hour
@@ -187,7 +201,24 @@ upstream-approved or generally safe for all PFLOTRAN modes. Preserve default
 zero and explicitly select the diagnostic option in tests. Do not overwrite
 the old release or its result trees.
 
+## Resume these instructions in a later login shell
+
+```bash
+export BUILD_ROOT=/global/homes/c/cliu6/Software/pflotran-v5.0-auxrefresh1-cpe2603
+export PETSC_DIR="$BUILD_ROOT/src/petsc"
+export PETSC_ARCH=arch-cpe2603-gnu-cpu-opt
+export PFLOTRAN_EXE_NEW="$BUILD_ROOT/bin/pflotran-coastal-diag1"
+source "$BUILD_ROOT/src/pflotran/coastal/nersc-env.sh"
+```
+
+Use the executable explicitly from a scratch case directory. No shell startup
+file or existing executable symlink needs changing.
+
 ## Version control
+
+Installation revision: `coastal-v5.0-auxrefresh-diag1-home1`. This changes
+installation placement and documentation only; PFLOTRAN Fortran source is
+identical to `coastal-v5.0-auxrefresh-diag1`. The previous tag is preserved.
 
 New work is committed as Chuyang Liu. Upstream authors and LICENSE/COPYRIGHT
 remain intact. This is a GitHub-hosted downstream of Bitbucket PFLOTRAN,
@@ -196,6 +227,8 @@ new tags for changes; do not rewrite released tags. Never commit executable
 build outputs, PETSc downloads, credentials, or model result trees.
 
 ## Official references
+
+- [NERSC filesystem guidance](https://docs.nersc.gov/filesystems/)
 
 - [NERSC environment timeline](https://docs.nersc.gov/systems/perlmutter/timeline/)
 - [NERSC compiler wrappers](https://docs.nersc.gov/development/build-tools/autoconf-make/)
